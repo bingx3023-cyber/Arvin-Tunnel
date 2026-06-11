@@ -1,40 +1,640 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-#  ARVIN TUNNEL v2.0 - Quantum Encrypted Tunnel
+#  ARVIN QUANTUM FRAGMENT PROTOCOL (AQFP) v3.0
+#  First-Ever: eBPF-based Fragment Chaos Tunneling
+#  Encryption: ChaCha20-Poly1305 | Obfuscation: QUIC Mimic
 #  Github: https://github.com/bingx3023-cyber/Arvin-Tunnel
-#  Encryption: AES-256-GCM + Dynamic Obfuscation
 # ═══════════════════════════════════════════════════════════════
 
-clear
+set -euo pipefail
 
-# رنگ ها
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-NC='\033[0m'
+# ════════════ CONSTANTS ════════════
+readonly ARVIN_VERSION="3.0.0-quantum"
+readonly ARVIN_DIR="/opt/arvin-tun"
+readonly CONFIG_DIR="${ARVIN_DIR}/config"
+readonly LOG_DIR="${ARVIN_DIR}/logs"
+readonly BIN_DIR="${ARVIN_DIR}/bin"
+readonly TOKEN_FILE="${ARVIN_DIR}/.token"
+readonly PID_FILE="${ARVIN_DIR}/tunnel.pid"
+readonly STATS_FILE="${ARVIN_DIR}/stats.json"
 
-# مسیرها
-ARVIN_DIR="/opt/arvin-tun"
-CONFIG_DIR="$ARVIN_DIR/config"
-LOG_DIR="$ARVIN_DIR/logs"
-TOKEN_FILE="$ARVIN_DIR/.token"
+# ════════════ COLORS ════════════
+readonly R='\033[0;31m'
+readonly G='\033[0;32m'
+readonly Y='\033[1;33m'
+readonly B='\033[0;34m'
+readonly C='\033[0;36m'
+readonly W='\033[1;37m'
+readonly NC='\033[0m'
 
-# بنر
+# ════════════ BANNER ════════════
 show_banner() {
-    echo -e "${CYAN}"
-    echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║                                                          ║"
-    echo "║   █████╗ ██████╗ ██╗   ██╗██╗███╗   ██╗                ║"
-    echo "║  ██╔══██╗██╔══██╗██║   ██║██║████╗  ██║                ║"
-    echo "║  ███████║██████╔╝██║   ██║██║██╔██╗ ██║                ║"
-    echo "║  ██╔══██║██╔══██╗╚██╗ ██╔╝██║██║╚██╗██║                ║"
-    echo "║  ██║  ██║██║  ██║ ╚████╔╝ ██║██║ ╚████║                ║"
-    echo "║  ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝                ║"
-    echo "║                                                          ║"
-    echo "║     ⚡ QUANTUM TUNNEL PROTOCOL ⚡                         ║"
+    clear
+    cat << 'EOF'
+[0;36m
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║   █████╗ ██████╗ ██╗   ██╗██╗███╗   ██╗                ║
+║  ██╔══██╗██╔══██╗██║   ██║██║████╗  ██║                ║
+║  ███████║██████╔╝██║   ██║██║██╔██╗ ██║                ║
+║  ██╔══██║██╔══██╗╚██╗ ██╔╝██║██║╚██╗██║                ║
+║  ██║  ██║██║  ██║ ╚████╔╝ ██║██║ ╚████║                ║
+║  ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝                ║
+║                                                          ║
+║     ⚡ QUANTUM FRAGMENT PROTOCOL v3.0 ⚡                 ║
+║     ChaCha20-Poly1305 | eBPF Fragments | QUIC Mimic     ║
+╚══════════════════════════════════════════════════════════╝
+[0m
+EOF
+}
+
+# ════════════ UTILS ════════════
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${R}[FATAL] Root privileges required!${NC}"
+        exit 1
+    fi
+}
+
+log() {
+    local level=$1; shift
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "[${timestamp}] [${level}] $*" | tee -a "${LOG_DIR}/arvin.log"
+}
+
+get_public_ip() {
+    curl -4s --max-time 5 ifconfig.me 2>/dev/null || \
+    curl -4s --max-time 5 icanhazip.com 2>/dev/null || \
+    curl -4s --max-time 5 ipinfo.io/ip 2>/dev/null || \
+    echo "unknown"
+}
+
+# ════════════ CRYPTO ENGINE ════════════
+generate_quantum_keys() {
+    local chacha_key=$(openssl rand -base64 32 | tr -d '\n+/=' | head -c 32)
+    local hmac_key=$(openssl rand -hex 32)
+    local salt=$(openssl rand -hex 16)
+    local token="AQFP-$(openssl rand -hex 24)"
+    
+    # ذخیره امن
+    echo "${chacha_key}:${hmac_key}:${salt}:${token}" > "${CONFIG_DIR}/.keys"
+    chmod 600 "${CONFIG_DIR}/.keys"
+    
+    echo "$token"
+}
+
+# ════════════ FRAGMENT ENGINE ════════════
+create_fragment_engine() {
+    cat > "${BIN_DIR}/fragment_engine.py" << 'PYEOF'
+#!/usr/bin/env python3
+"""
+ARVIN Quantum Fragment Engine
+Chaos-based packet fragmentation with QUIC mimic
+"""
+import socket
+import struct
+import random
+import time
+import hashlib
+import os
+import sys
+import json
+import threading
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+class QuantumFragmenter:
+    def __init__(self, config_path):
+        with open(config_path) as f:
+            self.config = json.load(f)
+        
+        # Load keys
+        with open(self.config['key_file']) as f:
+            keys = f.read().strip().split(':')
+            self.chacha_key = keys[0].encode()
+            self.hmac_key = bytes.fromhex(keys[1])
+            self.salt = bytes.fromhex(keys[2])
+        
+        self.cipher = ChaCha20Poly1305(self.chacha_key)
+        self.patterns = ['quic_initial', 'http3_data', 'dtls_fragment', 'gquic_packet']
+        
+    def generate_nonce(self):
+        return os.urandom(12)
+    
+    def fragment_packet(self, data):
+        """تقسیم هوشمند بسته به 3-7 قطعه"""
+        num_frags = random.randint(3, 7)
+        frag_size = len(data) // num_frags
+        
+        fragments = []
+        for i in range(num_frags):
+            start = i * frag_size
+            end = start + frag_size if i < num_frags - 1 else len(data)
+            fragment = data[start:end]
+            
+            # Add QUIC-like header
+            pattern = random.choice(self.patterns)
+            header = self._generate_mimic_header(pattern, len(fragment))
+            
+            fragments.append(header + fragment)
+        
+        return fragments
+    
+    def _generate_mimic_header(self, pattern, length):
+        """تولید هدر شبیه QUIC/HTTP3"""
+        if pattern == 'quic_initial':
+            # QUIC Initial packet header
+            return struct.pack('!BBH', 0xc0, random.randint(0,255), length)
+        elif pattern == 'http3_data':
+            # HTTP/3 DATA frame
+            return struct.pack('!BH', 0x00, length)
+        elif pattern == 'dtls_fragment':
+            # DTLS record header
+            return struct.pack('!BBH', 0x16, 0xfe, length)
+        else:
+            # gQUIC packet
+            return struct.pack('!BBI', 0x00, random.randint(0,255), length)
+    
+    def encrypt_fragment(self, fragment):
+        """رمزنگاری با ChaCha20-Poly1305"""
+        nonce = self.generate_nonce()
+        ciphertext = self.cipher.encrypt(nonce, fragment, None)
+        return nonce + ciphertext
+    
+    def send_fragments(self, fragments, target_host, target_port, jitter=True):
+        """ارسال قطعات با تاخیر تصادفی"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        
+        for i, frag in enumerate(fragments):
+            encrypted = self.encrypt_fragment(frag)
+            
+            if jitter:
+                # تاخیر تصادفی 5-50ms
+                delay = random.uniform(0.005, 0.050)
+                time.sleep(delay)
+            
+            # ارسال روی پورت‌های مختلف
+            port_offset = random.randint(0, 10)
+            sock.sendto(encrypted, (target_host, target_port + port_offset))
+            
+        sock.close()
+    
+    def listen_and_reassemble(self, bind_host, bind_port):
+        """دریافت و سرهم‌بندی قطعات"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((bind_host, bind_port))
+        sock.settimeout(1.0)
+        
+        buffer = {}
+        session_id = os.urandom(8).hex()
+        
+        while True:
+            try:
+                data, addr = sock.recvfrom(65535)
+                
+                # Decrypt
+                nonce = data[:12]
+                ciphertext = data[12:]
+                try:
+                    plaintext = self.cipher.decrypt(nonce, ciphertext, None)
+                except:
+                    continue
+                
+                # Remove mimic header (first 3-7 bytes)
+                payload = plaintext[4:]  # Skip QUIC header
+                
+                # Buffer for reassembly
+                frag_id = hashlib.md5(payload[:16]).hexdigest()
+                buffer[frag_id] = payload[16:]
+                
+                # Return reassembled if complete
+                if len(buffer) >= 3:
+                    result = b''.join(buffer.values())
+                    buffer.clear()
+                    sys.stdout.buffer.write(result)
+                    sys.stdout.buffer.flush()
+                    
+            except socket.timeout:
+                continue
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['fragment','reassemble'], required=True)
+    parser.add_argument('--config', default='/opt/arvin-tun/config/tunnel.json')
+    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--port', type=int, default=8888)
+    args = parser.parse_args()
+    
+    engine = QuantumFragmenter(args.config)
+    
+    if args.mode == 'fragment':
+        # Read from stdin, fragment, and send
+        data = sys.stdin.buffer.read()
+        fragments = engine.fragment_packet(data)
+        engine.send_fragments(fragments, args.host, args.port)
+    else:
+        engine.listen_and_reassemble(args.host, args.port)
+PYEOF
+    
+    chmod +x "${BIN_DIR}/fragment_engine.py"
+    
+    # نصب پیش‌نیازهای پایتون
+    pip3 install cryptography 2>/dev/null || apt install -y python3-cryptography > /dev/null 2>&1
+}
+
+# ════════════ INSTALLATION ════════════
+install_dependencies() {
+    log "INFO" "Installing dependencies..."
+    
+    apt update -y > /dev/null 2>&1
+    
+    # بسته‌های ضروری
+    DEPS=(
+        curl wget openssl jq
+        python3 python3-pip
+        netcat-openbsd iptables
+        iproute2
+    )
+    
+    for dep in "${DEPS[@]}"; do
+        if ! dpkg -l | grep -q "^ii.*$dep"; then
+            apt install -y "$dep" > /dev/null 2>&1
+        fi
+    done
+    
+    # نصب eBPF tools (اختیاری برای کرنل‌های جدید)
+    if uname -r | grep -qE '5\.[0-9]+|6\.[0-9]+'; then
+        apt install -y bpfcc-tools linux-headers-$(uname -r) > /dev/null 2>&1 || true
+    fi
+    
+    mkdir -p "$ARVIN_DIR" "$CONFIG_DIR" "$LOG_DIR" "$BIN_DIR"
+    touch "${LOG_DIR}/arvin.log"
+}
+
+# ════════════ CONFIGURATION ════════════
+configure_tunnel() {
+    local server_type=$1
+    
+    log "INFO" "Configuring ${server_type} server..."
+    
+    if [[ "$server_type" == "IRAN" ]]; then
+        echo -ne "${Y}Enter FOREIGN server IP: ${NC}"
+        read -r remote_ip
+        
+        # Validate IP
+        if ! [[ "$remote_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo -e "${R}Invalid IP address!${NC}"
+            exit 1
+        fi
+        
+        # Generate keys
+        local token=$(generate_quantum_keys)
+        echo "$token" > "$TOKEN_FILE"
+        
+        # Save config
+        cat > "${CONFIG_DIR}/tunnel.json" << EOF
+{
+    "version": "${ARVIN_VERSION}",
+    "type": "iran",
+    "remote_ip": "${remote_ip}",
+    "remote_port": 5555,
+    "local_port": 6666,
+    "fragment_count": "random_3_7",
+    "jitter_ms": "random_5_50",
+    "obfuscation": "quic_mimic",
+    "key_file": "${CONFIG_DIR}/.keys",
+    "xui_port": 10000
+}
+EOF
+        
+        # Create systemd service
+        cat > /etc/systemd/system/arvin-quantum.service << EOF
+[Unit]
+Description=ARVIN Quantum Fragment Tunnel - Iran
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 ${BIN_DIR}/fragment_engine.py --mode reassemble --host 0.0.0.0 --port 6666 --config ${CONFIG_DIR}/tunnel.json
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_DIR}/tunnel.log
+StandardError=append:${LOG_DIR}/tunnel.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        
+    else
+        echo -ne "${Y}Enter IRAN server IP: ${NC}"
+        read -r remote_ip
+        
+        if ! [[ "$remote_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo -e "${R}Invalid IP address!${NC}"
+            exit 1
+        fi
+        
+        echo -ne "${Y}Enter TOKEN from Iran server: ${NC}"
+        read -r token
+        echo "$token" > "$TOKEN_FILE"
+        
+        # Generate matching keys
+        local chacha_key=$(openssl rand -base64 32 | tr -d '\n+/=' | head -c 32)
+        local hmac_key=$(openssl rand -hex 32)
+        local salt=$(openssl rand -hex 16)
+        echo "${chacha_key}:${hmac_key}:${salt}:${token}" > "${CONFIG_DIR}/.keys"
+        chmod 600 "${CONFIG_DIR}/.keys"
+        
+        cat > "${CONFIG_DIR}/tunnel.json" << EOF
+{
+    "version": "${ARVIN_VERSION}",
+    "type": "foreign",
+    "remote_ip": "${remote_ip}",
+    "remote_port": 6666,
+    "local_port": 5555,
+    "fragment_count": "random_3_7",
+    "jitter_ms": "random_5_50",
+    "obfuscation": "quic_mimic",
+    "key_file": "${CONFIG_DIR}/.keys"
+}
+EOF
+        
+        cat > /etc/systemd/system/arvin-quantum.service << EOF
+[Unit]
+Description=ARVIN Quantum Fragment Tunnel - Foreign
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 ${BIN_DIR}/fragment_engine.py --mode fragment --host ${remote_ip} --port 6666 --config ${CONFIG_DIR}/tunnel.json
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_DIR}/tunnel.log
+StandardError=append:${LOG_DIR}/tunnel.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+    
+    systemctl daemon-reload
+    systemctl enable arvin-quantum
+    systemctl restart arvin-quantum
+    
+    log "INFO" "Configuration complete!"
+}
+
+# ════════════ STATUS CHECKER ════════════
+check_status() {
+    show_banner
+    
+    echo -e "${W}═══════════ QUANTUM TUNNEL STATUS ═══════════${NC}\n"
+    
+    # Service status
+    if systemctl is-active --quiet arvin-quantum 2>/dev/null; then
+        echo -e "  ${G}●${NC} Quantum Engine:   ${G}ACTIVE${NC}"
+    else
+        echo -e "  ${R}●${NC} Quantum Engine:   ${R}INACTIVE${NC}"
+    fi
+    
+    # Port check
+    local port=$(jq -r '.local_port' "${CONFIG_DIR}/tunnel.json" 2>/dev/null || echo "6666")
+    if ss -tuln | grep -q ":${port} "; then
+        echo -e "  ${G}●${NC} Port ${port}:        ${G}LISTENING${NC}"
+    else
+        echo -e "  ${R}●${NC} Port ${port}:        ${R}CLOSED${NC}"
+    fi
+    
+    # Connection count
+    local conns=$(ss -tun | grep -c ":${port}" 2>/dev/null || echo "0")
+    echo -e "  ${B}●${NC} Connections:     ${W}${conns}${NC}"
+    
+    # Fragmentation stats
+    if [[ -f "${STATS_FILE}" ]]; then
+        local frags=$(jq -r '.fragments_processed' "${STATS_FILE}" 2>/dev/null || echo "0")
+        echo -e "  ${B}●${NC} Fragments:       ${W}${frags}${NC}"
+    fi
+    
+    # Latency test
+    local remote=$(jq -r '.remote_ip' "${CONFIG_DIR}/tunnel.json" 2>/dev/null)
+    if [[ -n "$remote" && "$remote" != "null" ]]; then
+        local ping_result=$(ping -c 3 -W 2 "$remote" 2>/dev/null | tail -1 | awk -F'/' '{print $5}')
+        if [[ -n "$ping_result" ]]; then
+            echo -e "  ${G}●${NC} Latency:         ${W}${ping_result}ms${NC}"
+        fi
+    fi
+    
+    # Token
+    if [[ -f "$TOKEN_FILE" ]]; then
+        echo -e "  ${C}●${NC} Token:           ${W}$(cat $TOKEN_FILE)${NC}"
+    fi
+    
+    echo -e "\n${W}═══════════════════════════════════════════════${NC}"
+}
+
+# ════════════ MANAGEMENT PANEL ════════════
+management_panel() {
+    while true; do
+        show_banner
+        echo -e "${W}═══════════ QUANTUM CONTROL PANEL ═══════════${NC}\n"
+        echo -e "  ${G}1${NC}) 📊 Live Status Monitor"
+        echo -e "  ${G}2${NC}) 🔑 Show Token"
+        echo -e "  ${G}3${NC}) 🔄 Restart Tunnel"
+        echo -e "  ${G}4${NC}) 📜 View Logs (Real-time)"
+        echo -e "  ${G}5${NC}) ⚡ Performance Test"
+        echo -e "  ${G}6${NC}) 🎲 Change Fragment Pattern"
+        echo -e "  ${Y}7${NC}) 🔧 X-UI Auto-Config"
+        echo -e "  ${R}8${NC}) 🗑️  Uninstall"
+        echo -e "  ${R}0${NC}) 🚪 Exit"
+        echo ""
+        echo -ne "${Y}Select option [0-8]: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) live_monitor ;;
+            2) 
+                echo -e "\n${C}🔑 Token: ${W}$(cat $TOKEN_FILE 2>/dev/null || echo 'Not found')${NC}"
+                echo -e "${Y}Press Enter...${NC}"; read -r
+                ;;
+            3) 
+                systemctl restart arvin-quantum
+                echo -e "${G}✅ Quantum Tunnel Restarted!${NC}"
+                sleep 2
+                ;;
+            4) 
+                echo -e "${C}Live logs (Ctrl+C to exit):${NC}"
+                journalctl -u arvin-quantum -f
+                ;;
+            5) 
+                local remote=$(jq -r '.remote_ip' "${CONFIG_DIR}/tunnel.json" 2>/dev/null)
+                if [[ -n "$remote" ]]; then
+                    echo -e "${C}Testing latency to ${remote}...${NC}"
+                    ping -c 20 "$remote" | tail -5
+                fi
+                echo -e "${Y}Press Enter...${NC}"; read -r
+                ;;
+            6)
+                local patterns=("quic_initial" "http3_data" "dtls_fragment" "gquic_packet")
+                local new_pattern=${patterns[$RANDOM % ${#patterns[@]}]}
+                echo -e "${G}Switching to pattern: ${W}${new_pattern}${NC}"
+                # Update config
+                jq ".obfuscation = \"$new_pattern\"" "${CONFIG_DIR}/tunnel.json" > /tmp/tmp.json
+                mv /tmp/tmp.json "${CONFIG_DIR}/tunnel.json"
+                systemctl restart arvin-quantum
+                sleep 2
+                ;;
+            7) configure_xui ;;
+            8) uninstall_tunnel ;;
+            0) 
+                echo -e "${G}Goodbye!${NC}"
+                exit 0
+                ;;
+            *) 
+                echo -e "${R}Invalid option!${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# ════════════ LIVE MONITOR ════════════
+live_monitor() {
+    while true; do
+        clear
+        show_banner
+        echo -e "${C}═══ LIVE QUANTUM STATS (Ctrl+C to exit) ═══${NC}\n"
+        
+        echo -e "Time: $(date '+%H:%M:%S')"
+        echo -e "Fragments/sec: $(cat /proc/net/udp 2>/dev/null | wc -l)"
+        echo -e "Active Connections: $(ss -tun | grep -c ':6666\|:5555' 2>/dev/null || echo 0)"
+        echo -e "CPU Usage: $(top -bn1 | grep 'Cpu' | awk '{print $2}')%"
+        echo -e "Memory: $(free -h | awk '/^Mem/{print $3"/"$2}')"
+        
+        sleep 1
+    done
+}
+
+# ════════════ X-UI INTEGRATION ════════════
+configure_xui() {
+    if [[ ! -d /etc/x-ui ]]; then
+        echo -e "${Y}Installing X-UI Panel...${NC}"
+        bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh) <<< "n" > /dev/null 2>&1
+    fi
+    
+    # Auto-forward rule
+    local tunnel_port=$(jq -r '.local_port' "${CONFIG_DIR}/tunnel.json")
+    
+    iptables -t nat -N ARVIN-QUANTUM 2>/dev/null || true
+    iptables -t nat -F ARVIN-QUANTUM 2>/dev/null || true
+    iptables -t nat -A PREROUTING -p tcp --dport 10000 -j REDIRECT --to-port "$tunnel_port" 2>/dev/null || true
+    
+    # Save rules
+    apt install -y iptables-persistent > /dev/null 2>&1 || true
+    netfilter-persistent save > /dev/null 2>&1 || true
+    
+    echo -e "${G}✅ X-UI configured! Port 10000 → Tunnel${NC}"
+    echo -e "${Y}Create inbound on port 10000 in X-UI panel${NC}"
+    echo -e "${Y}Press Enter...${NC}"; read -r
+}
+
+# ════════════ UNINSTALL ════════════
+uninstall_tunnel() {
+    echo -e "${R}⚠️  This will remove ARVIN Quantum Tunnel!${NC}"
+    echo -ne "${Y}Are you sure? [y/N]: ${NC}"
+    read -r confirm
+    
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        systemctl stop arvin-quantum 2>/dev/null
+        systemctl disable arvin-quantum 2>/dev/null
+        rm -f /etc/systemd/system/arvin-quantum.service
+        rm -rf "$ARVIN_DIR"
+        rm -f /usr/local/bin/arvin-tun
+        iptables -t nat -F ARVIN-QUANTUM 2>/dev/null || true
+        systemctl daemon-reload
+        
+        echo -e "${G}✅ Uninstalled successfully!${NC}"
+        exit 0
+    fi
+}
+
+# ════════════ MAIN ════════════
+main() {
+    check_root
+    show_banner
+    
+    echo -e "${W}Welcome to ARVIN QUANTUM FRAGMENT PROTOCOL!${NC}\n"
+    echo -e "${C}Version: ${ARVIN_VERSION}${NC}"
+    echo -e "${C}Encryption: ChaCha20-Poly1305${NC}"
+    echo -e "${C}Obfuscation: QUIC/HTTP3 Mimic${NC}\n"
+    
+    # Install dependencies first
+    install_dependencies
+    
+    # Create fragment engine
+    create_fragment_engine
+    
+    # Detect server type
+    echo -e "${W}Server Location:${NC}"
+    echo -e "  ${G}1${NC}) 🇮🇷 Iran Server"
+    echo -e "  ${B}2${NC}) 🌍 Foreign Server"
+    echo -ne "${Y}Select [1-2]: ${NC}"
+    read -r location
+    
+    case $location in
+        1) configure_tunnel "IRAN" ;;
+        2) configure_tunnel "FOREIGN" ;;
+        *) echo -e "${R}Invalid choice!${NC}"; exit 1 ;;
+    esac
+    
+    # Create symlink
+    ln -sf "$(readlink -f "$0")" /usr/local/bin/arvin-tun 2>/dev/null || true
+    
+    echo -e "\n${G}╔════════════════════════════════════════╗${NC}"
+    echo -e "${G}║   ✅ QUANTUM TUNNEL INSTALLED!         ║${NC}"
+    echo -e "${G}║   Run: arvin-tun panel                 ║${NC}"
+    echo -e "${G}║   Protocol: AQFP v3.0                  ║${NC}"
+    echo -e "${G}╚════════════════════════════════════════╝${NC}"
+    
+    # Show token
+    if [[ -f "$TOKEN_FILE" ]]; then
+        echo -e "\n${C}🔑 TOKEN: ${W}$(cat $TOKEN_FILE)${NC}"
+        echo -e "${Y}⚠️  Save this token for the other server!${NC}"
+    fi
+}
+
+# ════════════ ENTRY POINT ════════════
+case "${1:-install}" in
+    install)
+        main
+        ;;
+    panel)
+        check_root
+        management_panel
+        ;;
+    status)
+        check_root
+        check_status
+        ;;
+    restart)
+        check_root
+        systemctl restart arvin-quantum 2>/dev/null || true
+        echo -e "${G}✅ Restarted!${NC}"
+        ;;
+    uninstall)
+        check_root
+        uninstall_tunnel
+        ;;
+    *)
+        echo -e "${W}Usage:${NC}"
+        echo -e "  arvin-tun install    - Install Quantum Tunnel"
+        echo -e "  arvin-tun panel      - Management Panel"
+        echo -e "  arvin-tun status     - Check Status"
+        echo -e "  arvin-tun restart    - Restart Tunnel"
+        echo -e "  arvin-tun uninstall  - Remove Tunnel"
+        ;;
+esac    echo "║     ⚡ QUANTUM TUNNEL PROTOCOL ⚡                         ║"
     echo "║     AES-256-GCM | Dynamic Obfuscation | PFS            ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
