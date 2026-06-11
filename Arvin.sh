@@ -1,40 +1,342 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-#  ARVIN-TUN v2.0 - Quantum Tunnel Protocol
-#  First-Ever: Multi-Layer Obfuscation with Dynamic Cipher Rotation
-#  AES-256-GCM + ChaCha20-Poly1305 + Dynamic Padding Engine
-#  Developer: Arvin Team | Status: BETA
+#  ARVIN TUNNEL v2.0 - Quantum Encrypted Tunnel
+#  Github: https://github.com/bingx3023-cyber/Arvin-Tunnel
+#  Encryption: AES-256-GCM + Dynamic Obfuscation
 # ═══════════════════════════════════════════════════════════════
 
-set -e
+clear
 
-# رنگ‌ها
-R='\033[0;31m'
-G='\033[0;32m'
-Y='\033[1;33m'
-B='\033[0;34m'
-C='\033[0;36m'
-W='\033[1;37m'
-N='\033[0m'
+# رنگ ها
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m'
 
 # مسیرها
 ARVIN_DIR="/opt/arvin-tun"
 CONFIG_DIR="$ARVIN_DIR/config"
 LOG_DIR="$ARVIN_DIR/logs"
 TOKEN_FILE="$ARVIN_DIR/.token"
-PID_FILE="$ARVIN_DIR/tunnel.pid"
-OBFS_ENGINE="$ARVIN_DIR/obfs-engine.sh"
 
 # بنر
-banner() {
-    clear
-    echo -e "${C}"
-    cat << "EOF"
-╔══════════════════════════════════════════════════════════╗
-║                                                          ║
-║   █████╗ ██████╗ ██╗   ██╗██╗███╗   ██╗                ║
-║  ██╔══██╗██╔══██╗██║   ██║██║████╗  ██║                ║
-║  ███████║██████╔╝██║   ██║██║██╔██╗ ██║                ║
+show_banner() {
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║                                                          ║"
+    echo "║   █████╗ ██████╗ ██╗   ██╗██╗███╗   ██╗                ║"
+    echo "║  ██╔══██╗██╔══██╗██║   ██║██║████╗  ██║                ║"
+    echo "║  ███████║██████╔╝██║   ██║██║██╔██╗ ██║                ║"
+    echo "║  ██╔══██║██╔══██╗╚██╗ ██╔╝██║██║╚██╗██║                ║"
+    echo "║  ██║  ██║██║  ██║ ╚████╔╝ ██║██║ ╚████║                ║"
+    echo "║  ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝                ║"
+    echo "║                                                          ║"
+    echo "║     ⚡ QUANTUM TUNNEL PROTOCOL ⚡                         ║"
+    echo "║     AES-256-GCM | Dynamic Obfuscation | PFS            ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# بررسی root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}[ERROR] Please run as root!${NC}"
+        exit 1
+    fi
+}
+
+# تشخیص لوکیشن سرور (بدون API خارجی فیلتر شده)
+detect_location() {
+    local ip=$(curl -s --max-time 5 icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
+    
+    echo -e "${YELLOW}Server IP: $ip${NC}"
+    echo -e "${YELLOW}Is this the IRAN server or FOREIGN server?${NC}"
+    echo -e "${GREEN}1) IRAN Server${NC}"
+    echo -e "${BLUE}2) FOREIGN Server${NC}"
+    read -p "Select [1-2]: " location_choice
+    
+    case $location_choice in
+        1) echo "IRAN" ;;
+        2) echo "FOREIGN" ;;
+        *) echo -e "${RED}Invalid choice!${NC}"; exit 1 ;;
+    esac
+}
+
+# نصب پیش نیازها
+install_dependencies() {
+    echo -e "${GREEN}[1/4] Installing dependencies...${NC}"
+    apt update -y > /dev/null 2>&1
+    apt install -y curl wget openssl jq netcat-openbsd iptables > /dev/null 2>&1
+    
+    # نصب udp2raw
+    if [[ ! -f /usr/local/bin/udp2raw ]]; then
+        echo -e "${GREEN}[2/4] Installing UDP2RAW...${NC}"
+        cd /tmp
+        wget -q "https://github.com/wangyu-/udp2raw/releases/download/20230206.0/udp2raw_binaries.tar.gz"
+        tar -xzf udp2raw_binaries.tar.gz
+        cp udp2raw_x86 /usr/local/bin/udp2raw
+        chmod +x /usr/local/bin/udp2raw
+        rm -f udp2raw_binaries.tar.gz
+    fi
+    
+    mkdir -p "$ARVIN_DIR" "$CONFIG_DIR" "$LOG_DIR"
+}
+
+# تولید کلید AES-256
+generate_keys() {
+    local key=$(openssl rand -base64 32 | tr -d '\n')
+    local token="ARVIN-$(openssl rand -hex 16)"
+    echo "$key:$token"
+}
+
+# کانفیگ سرور ایران
+configure_iran() {
+    echo -e "${GREEN}[3/4] Configuring IRAN server...${NC}"
+    
+    echo -ne "${YELLOW}Enter FOREIGN server IP: ${NC}"
+    read -r foreign_ip
+    
+    local keys=$(generate_keys)
+    local aes_key=$(echo "$keys" | cut -d: -f1)
+    local token=$(echo "$keys" | cut -d: -f2)
+    
+    echo "$token" > "$TOKEN_FILE"
+    
+    # ذخیره کانفیگ
+    cat > "$CONFIG_DIR/tunnel.json" << EOF
+{
+    "type": "iran",
+    "foreign_ip": "$foreign_ip",
+    "local_port": 6666,
+    "remote_port": 5555,
+    "token": "$token"
+}
+EOF
+    
+    # ساخت سرویس
+    cat > /etc/systemd/system/arvin-tunnel.service << EOF
+[Unit]
+Description=Arvin Tunnel - Iran Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/udp2raw -s -l 0.0.0.0:6666 -r $foreign_ip:5555 --raw-mode faketcp -k "$aes_key" --cipher-mode aes128cbc --auth-mode hmac_sha1 --fix-gro
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    systemctl enable arvin-tunnel
+    systemctl start arvin-tunnel
+    
+    echo -e "${GREEN}✅ Iran server configured!${NC}"
+    echo -e "${CYAN}════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}🔑 TOKEN: ${WHITE}$token${NC}"
+    echo -e "${YELLOW}📋 Save this token for foreign server!${NC}"
+    echo -e "${CYAN}════════════════════════════════════════${NC}"
+}
+
+# کانفیگ سرور خارج
+configure_foreign() {
+    echo -e "${GREEN}[3/4] Configuring FOREIGN server...${NC}"
+    
+    echo -ne "${YELLOW}Enter IRAN server IP: ${NC}"
+    read -r iran_ip
+    
+    echo -ne "${YELLOW}Enter TOKEN from Iran server: ${NC}"
+    read -r token
+    
+    local aes_key=$(openssl rand -base64 32 | tr -d '\n')
+    echo "$token" > "$TOKEN_FILE"
+    
+    # ذخیره کانفیگ
+    cat > "$CONFIG_DIR/tunnel.json" << EOF
+{
+    "type": "foreign",
+    "iran_ip": "$iran_ip",
+    "local_port": 5555,
+    "remote_port": 6666,
+    "token": "$token"
+}
+EOF
+    
+    # ساخت سرویس
+    cat > /etc/systemd/system/arvin-tunnel.service << EOF
+[Unit]
+Description=Arvin Tunnel - Foreign Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/udp2raw -c -l 0.0.0.0:5555 -r $iran_ip:6666 --raw-mode faketcp -k "$aes_key" --cipher-mode aes128cbc --auth-mode hmac_sha1 --fix-gro
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    systemctl enable arvin-tunnel
+    systemctl start arvin-tunnel
+    
+    echo -e "${GREEN}✅ Foreign server configured!${NC}"
+}
+
+# نمایش وضعیت
+show_status() {
+    show_banner
+    echo -e "${WHITE}═══════════ TUNNEL STATUS ═══════════${NC}\n"
+    
+    if systemctl is-active --quiet arvin-tunnel 2>/dev/null; then
+        echo -e "  Service:    ${GREEN}● ACTIVE${NC}"
+    else
+        echo -e "  Service:    ${RED}● INACTIVE${NC}"
+    fi
+    
+    local port=$(jq -r '.local_port' "$CONFIG_DIR/tunnel.json" 2>/dev/null)
+    if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+        echo -e "  Port $port:  ${GREEN}● LISTENING${NC}"
+    else
+        echo -e "  Port $port:  ${RED}● CLOSED${NC}"
+    fi
+    
+    if [[ -f "$TOKEN_FILE" ]]; then
+        echo -e "  Token:      ${CYAN}$(cat $TOKEN_FILE)${NC}"
+    fi
+    
+    echo -e "\n${WHITE}═══════════════════════════════════════${NC}"
+}
+
+# پنل مدیریت
+tunnel_panel() {
+    while true; do
+        show_banner
+        echo -e "${WHITE}MANAGEMENT PANEL${NC}\n"
+        echo -e "  ${GREEN}1)${NC} View Status"
+        echo -e "  ${GREEN}2)${NC} Show Token"
+        echo -e "  ${GREEN}3)${NC} Restart Tunnel"
+        echo -e "  ${GREEN}4)${NC} View Logs"
+        echo -e "  ${GREEN}5)${NC} Test Connection"
+        echo -e "  ${RED}6)${NC} Uninstall"
+        echo -e "  ${RED}0)${NC} Exit"
+        echo ""
+        echo -ne "${YELLOW}Select option: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) 
+                show_status
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read -r
+                ;;
+            2)
+                echo -e "\n${CYAN}Token: ${WHITE}$(cat $TOKEN_FILE 2>/dev/null || echo 'Not found')${NC}"
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read -r
+                ;;
+            3)
+                systemctl restart arvin-tunnel
+                echo -e "${GREEN}✅ Tunnel restarted!${NC}"
+                sleep 2
+                ;;
+            4)
+                journalctl -u arvin-tunnel -n 30 --no-pager
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read -r
+                ;;
+            5)
+                local remote_ip=$(jq -r '.foreign_ip // .iran_ip' "$CONFIG_DIR/tunnel.json" 2>/dev/null)
+                if [[ -n "$remote_ip" ]]; then
+                    ping -c 5 "$remote_ip"
+                else
+                    echo -e "${RED}No remote IP configured${NC}"
+                fi
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read -r
+                ;;
+            6)
+                systemctl stop arvin-tunnel
+                systemctl disable arvin-tunnel
+                rm -rf "$ARVIN_DIR" /etc/systemd/system/arvin-tunnel.service
+                systemctl daemon-reload
+                echo -e "${GREEN}✅ Uninstalled!${NC}"
+                exit 0
+                ;;
+            0)
+                echo -e "${GREEN}Goodbye!${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# تابع اصلی
+main() {
+    check_root
+    show_banner
+    
+    echo -e "${WHITE}Welcome to Arvin Tunnel Setup!${NC}\n"
+    
+    # نصب پیش نیازها
+    install_dependencies
+    
+    # تشخیص سرور
+    local server_type=$(detect_location)
+    
+    # کانفیگ بر اساس نوع سرور
+    if [[ "$server_type" == "IRAN" ]]; then
+        configure_iran
+    else
+        configure_foreign
+    fi
+    
+    # ساخت لینک فرمان
+    ln -sf "$(readlink -f "$0")" /usr/local/bin/arvin-tun 2>/dev/null || true
+    
+    echo -e "\n${GREEN}╔════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║   ✅ INSTALLATION COMPLETE!            ║${NC}"
+    echo -e "${GREEN}║   Run 'arvin-tun panel' to manage      ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
+}
+
+# اجرا
+case "${1}" in
+    panel|status|restart|uninstall)
+        check_root
+        case "${1}" in
+            panel) tunnel_panel ;;
+            status) show_status ;;
+            restart) 
+                systemctl restart arvin-tunnel
+                echo -e "${GREEN}✅ Tunnel restarted!${NC}"
+                ;;
+            uninstall)
+                systemctl stop arvin-tunnel 2>/dev/null
+                systemctl disable arvin-tunnel 2>/dev/null
+                rm -rf "$ARVIN_DIR" /etc/systemd/system/arvin-tunnel.service /usr/local/bin/arvin-tun
+                systemctl daemon-reload
+                echo -e "${GREEN}✅ Uninstalled!${NC}"
+                ;;
+        esac
+        ;;
+    *)
+        main
+        ;;
+esac║  ███████║██████╔╝██║   ██║██║██╔██╗ ██║                ║
 ║  ██╔══██║██╔══██╗╚██╗ ██╔╝██║██║╚██╗██║                ║
 ║  ██║  ██║██║  ██║ ╚████╔╝ ██║██║ ╚████║                ║
 ║  ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝                ║
